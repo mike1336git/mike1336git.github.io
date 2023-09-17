@@ -1,0 +1,138 @@
+<!doctype html>
+<html>
+<!-- Dave Dbarc - this is freely given to threejs.org & https://github.com/mrdoob/three.js
+     in the hopes that they will modify it to their taste as a text via texture example,
+     and reference it in https://threejs.org/docs/#manual/en/introduction/Creating-text (item#2).
+-->
+  <head>
+    <title> threejs Text via Texture Example </title>
+    <style type="text/css">
+    </style>
+    <script src="../lib/three.min.js"></script>
+    <script type="text/javascript">
+    
+  //https://discourse.threejs.org/t/an-example-of-text-to-canvas-to-texture-to-material-to-mesh-not-too-difficult/13757
+
+	"use strict";
+
+	var js3canvas, js3w, js3h;
+	var renderer, camera, world, piggy, geometry, material, mesh;
+
+	window.onload = function() {
+		init3js(); // the standard 3js stuff
+		// ======
+		// The call is dcText(text, worldTextHeight, worldRectangleHeight, fontPixelHeight, fgcolor, bgcolor);.
+		// The widths are calculated and returned if desired.
+		// bg is transparent if omitted.
+
+		// ====== text#1, "Hello, world" ====== shows basic call
+		mesh = textBoard("Hello, world", 15, 20, 0x000000, 0xcccccc); // text #1, Hello, world
+		world.add(mesh);
+		var tmp = mesh.boardWidth; // is width of rectangle; for later use
+
+		// text#2, "TRANSPARENT"         ====== transparent
+		mesh = textBoard("TRANSPARENT", 10, 10, 0xff00ff);      // text #2, TRANSPARENT
+		mesh.position.set(0,-12,1); // move geometry up and out
+		world.add(mesh);
+
+		// ====== text#3, "XpiggyX"      ====== shows you can customize 
+		piggy = new THREE.Group(); // for rotating sign
+		world.add(piggy);
+		mesh = textBoard("XpiggyX", 15, 20, 0xffffff, 0x0000ff); // text #3, XpiggyX (descenders)
+		mesh.ctx.lineWidth = 3; // can add glitter to texture here
+		mesh.ctx.strokeStyle = "white";
+		mesh.ctx.strokeRect(3, 3, mesh.BoardWidthInPx-6, mesh.BoardHeightInPx-6);
+		piggy.position.set(tmp/2,20,0); // placed at end of "Hello, world"
+		piggy.add(mesh);
+
+		animate();
+	};
+
+	function init3js() { // standard 3js stuff
+		js3canvas = document.getElementById("js3canvas");
+		js3w = js3canvas.width;
+		js3h = js3canvas.height;
+
+		renderer = new THREE.WebGLRenderer( { canvas:js3canvas } );
+
+		camera = new THREE.PerspectiveCamera(50, js3w/js3h, 1, 200);
+		camera.position.set(15,0,100);
+		camera.lookAt(15,0,0);
+		
+		world = new THREE.Scene();
+		world.background = new THREE.Color(0x888888);
+	}
+
+	function animate() {
+		renderer.render( world, camera );
+		piggy.rotateY(.02);
+		requestAnimationFrame(animate);
+	}
+
+
+	function textBoard(txt, txtHeight, boadHeight, txtColor, boardColor) {
+		// txt is the text.
+		// txtHeight is world height of text in the plane.
+		// boadHeight is world height of whole rectangle containing the text.
+		// The plane and texture canvas are created wide enough to hold the text.
+		
+		// And wider if boadHeight/txtHeight > 1 which indicates padding is desired.
+		var kPxToWorld = txtHeight/48;                // Px to World multplication factor
+		
+		// txtHeight, boadHeight, and hPxTxt are given; get boardHeightInPx
+		var boardHeightInPx = Math.ceil(boadHeight/kPxToWorld);     // boardHeightInPx: height of the whole texture canvas
+		
+		// create the canvas for the texture
+		var txtcanvas = document.createElement("canvas"); // create the canvas for the texture
+		var ctx = txtcanvas.getContext("2d");
+		ctx.font = "48px sans-serif";        
+
+		// now get the widths
+		var boardWidthInPx = ctx.measureText(txt).width;         // boardWidthInPx: width of the text in the texture canvas
+		var txtWidth = boardWidthInPx*kPxToWorld;               // txtWidth: world width of text in the plane
+		var boardWidth = txtWidth+(boadHeight-txtHeight); // boardWidth: world width of the whole plane
+		var boardWidthInPx = Math.ceil(boardWidth/kPxToWorld);    // boardWidthInPx: width of the whole texture canvas
+
+		// next, resize the texture canvas and fill the text
+		txtcanvas.width =  boardWidthInPx;
+		txtcanvas.height = boardHeightInPx;
+		if (boardColor != undefined) { // fill background if desired (transparent if none)
+			ctx.fillStyle = "#" + boardColor.toString(16).padStart(6, '0');
+			ctx.fillRect( 0,0, boardWidthInPx,boardHeightInPx);
+		} 
+		ctx.textAlign = "center";
+		ctx.textBaseline = "middle"; 
+		ctx.fillStyle = "#" + txtColor.toString(16).padStart(6, '0'); // txtColor
+		ctx.font = "48px sans-serif";   // needed after resize
+		ctx.fillText(txt, boardWidthInPx/2, boardHeightInPx/2); // the deed is done
+
+		// next, make the texture
+		var texture = new THREE.Texture(txtcanvas); // now make texture
+		texture.minFilter = THREE.LinearFilter;     // eliminate console message
+		texture.needsUpdate = true;                 // duh
+
+		// and make the world plane with the texture
+		geometry = new THREE.PlaneGeometry(boardWidth, boadHeight);
+		var material = new THREE.MeshBasicMaterial( 
+			{ side:THREE.DoubleSide, map:texture, transparent:true, opacity:1.0 } );
+		
+		// and finally, the mesh
+		var mesh = new THREE.Mesh(geometry, material);
+		mesh.txtWidth = txtWidth; // return the width of the text in the plane
+		mesh.boardWidth = boardWidth; //    and the width of the whole plane
+		mesh.boardWidthInPx = boardWidthInPx;       //    and the width of the text in the texture canvas
+		                            // (the heights of the above items are known)
+		mesh.boardWidthInPx = boardWidthInPx;       //    and the width of the whole texture canvas
+		mesh.boardHeightInPx = boardHeightInPx;       //    and the height of the whole texture canvas
+		mesh.ctx = ctx;             //    and the 2d texture context, for any glitter
+		// console.log(boardWidthInPx, hPxTxt, boardWidthInPx, boardHeightInPx);
+		// console.log(txtWidth, txtHeight, boardWidth, boadHeight);
+		return mesh;
+	}
+
+    </script>
+  </head>
+  <body>
+    <canvas id="js3canvas" width="800" height="600"></canvas>
+  </body>
+</html>
