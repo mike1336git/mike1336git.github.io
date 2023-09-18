@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>tm101_astroObjectsD2D</title>
+
+	<style type="text/css">
+		body { color:#000000; background-color:#fff8dd; }
+	</style>
+
+	<style type="text/css">
+		.lil-gui {
+			--width: 300px;
+			--name-width: 30%;
+		}
+	</style>
+
+	<script type="importmap">
+		{
+			"imports": {
+				"three": "../libm/three.module.js",
+				"orb": "../libm/OrbitControls.js",
+				"lil-gui": "../libm/lil-gui.module.min.js"
+			}
+		}
+	</script>
+
+
+<!-- %%%%%%%%%%%%%%%%%%%%  javaScript  %%%%%%%%%%%%%%%%%%%% -->
+
+<script type="module">
+
+import * as THREE from 'three';
+import { OrbitControls } from 'orb';
+import { GUI } from 'lil-gui';
+
+
+'use strict';
+
+/* =================================================================================================================
+//
+//  tm101_astroObjectsD2D
+//    Copyright(C) 2023 Mitsuru Ikeuchi
+//    Released under the MIT license ( https://opensource.org/licenses/MIT )
+//
+//    ver 0.0.0  2023.02.07 created, last updated on 2023.02.08
+//
+//
+// -----------------------------------------------------------------------------------------------------------------
+//
+//  gravity dynamics 2D
+//
+//    method: velocity Verlet Algorithm
+//      (1) vi = vi + (Fi/mi)*(0.5dt)
+//      (2) ri = ri + vi*dt
+//      (3) calculation Fi <- {r1,r2,...,rn} Fi=sum(Fij,j=1 to n),Fij=F(ri-rj)
+//      (4) vi = vi + (Fi/mi)*(0.5dt)
+//      goto (1)
+//
+//    force: F(r) = -G*mi*mj/r^2                     (r>r0) gravity
+//                = -20.0*G*mi*mj*(r-0.95*r0)/r0^3   (r<=r0) spring
+//                     spring: F(r) = -k(r-0.95*r0), 
+//                     continuty: F(r0) = -G*mi*mj/r0^2  --> k = 20*G*mi*mj/r0^3
+//
+//------------------------------------------------------------------------------------------------------------------
+*/
+
+const astroObjectsD2D = (function(){ //========================  astroObjectsD2D Module  ===========================
+
+	const gc_gg = 6.67408e-11;			// (m^3 kg^-1 s^-2) gravitational constant
+	const gc_AA = 1.0e5;				// (m) length unit gc_AA = 100 (km)
+	const gc_nMax = 1000;				// array max
+
+	var g_Nmt = 1000;					// number of ao
+	var g_sysTime = 0.0;				// (s) system time
+	var g_timeStep = 10.0;				// (s) time step dt
+	var g_potentialEnergy = 0.0;		// (J) total potential energy
+	var g_kineticEnergy = 0.0;			// (J) total kinrtic energy 
+
+	var g_xBoxSize = 480;				// in pixel
+	var g_yBoxSize = 400;				// in pixel
+	var g_yTextSize = 80;				// in pixel
+
+	var g_xx = dim1(gc_nMax);			// (m) position x-component
+	var g_yy = dim1(gc_nMax);			// (m) position y-component
+	var g_vx = dim1(gc_nMax);			// (m/s) velocity x-component
+	var g_vy = dim1(gc_nMax);			// (m/s) velocity y-component
+	var g_ffx = dim1(gc_nMax);			// (N) x-component of total force
+	var g_ffy = dim1(gc_nMax);			// (N) y-component of total force
+	var g_mas = dim1(gc_nMax);			// (kg) mass of astro object
+	var g_rc =  dim1(gc_nMax);			// (m) radius of astro object
+	var g_damp = dim1(gc_nMax);			// daming force between i-th and j*th object
+										// = -0.5*(g_damp[i]+g_damp[j])*vij^2
+
+	function dim1(n) {
+		var i, a=[];
+
+		for (i=0; i<n; i++) {
+			a[i] = 0.0;
+		}
+		return a;
+	}
+
+
+	//--------------------  astro objects data  --------------------
+
+	var aObject = [
+		// 0:mas(kg) 1:rc(m) 2:damp 3:hue color
+		[  1.0e18, 0.8*gc_AA, 1.0e8, 0.85 ],
+		[  1.0e18, 0.8*gc_AA, 5.0e8, 0.01 ],
+		[  5.0e18, 0.8*gc_AA, 2.0e8, 0.10 ],
+		[ 10.0e18, 0.8*gc_AA, 5.0e8, 0.20 ] ];
+
+
+	//--------------------  set initial condition  --------------------
+
+	function setInitialCondition( theme ) {
+
+		g_sysTime = 0.0;
+		setAOs( theme );
+	}
+
+
+	function setAOs(theme) {
+		var i,ii,knd=1, r,a,v0;
+		var rcOfKind = aObject[knd][1];
+
+		if (theme==0) { // 2-body
+			i = 0;
+			//setAOdisc(ii, knd, aa, x0, y0, r0, th, vx0, vy0)
+			i = setAOdisc(i,knd, 0.6*rcOfKind,-15.0*gc_AA, 0.0 *gc_AA, rcOfKind*3.0, 0.0,   0.0,  0.0);
+			i = setAOdisc(i,knd, 0.6*rcOfKind, 30.0*gc_AA, 0.0 *gc_AA, rcOfKind*2.0, 0.0,   0.0, 20.0);
+			g_Nmt = i;
+		} else if (theme==1) { // 3-body
+			i = 0;
+			i = setAOdisc(i,knd, 0.6*rcOfKind,-15.0*gc_AA,  0.0 *gc_AA, rcOfKind*3.0, 0.0,   0.0,  0.0);
+			i = setAOdisc(i,knd, 0.6*rcOfKind, 30.0*gc_AA,  0.0 *gc_AA, rcOfKind*1.5, 0.0,   0.0, 30.0);
+			i = setAOdisc(i,knd, 0.6*rcOfKind,-10.0*gc_AA,-20.0 *gc_AA, rcOfKind*1.5, 0.0, -50.0,  0.0);
+			g_Nmt = i;
+		} else if (theme==2) { // disk
+			i = 0;
+			i = setAOdisc(i,knd, 4.0*rcOfKind, 0.0*gc_AA,  0.0*gc_AA, rcOfKind*30.0, 0.0,   0.0,  0.0);
+			g_Nmt = i;
+			v0 = 50.0;
+			for (ii=0; ii<g_Nmt; ii++) {
+				r = Math.sqrt(g_xx[ii]*g_xx[ii]+g_yy[ii]*g_yy[ii]);
+				g_vx[ii] = -v0*g_yy[ii]/(rcOfKind*30);
+				g_vy[ii] = v0*g_xx[ii]/(rcOfKind*30);
+			}
+
+		} 
+
+		removeTranslationalMotion();
+	}
+
+	function setAOdisc(ii, knd, aa, x0, y0, r0, th, vx0, vy0) {
+		var ip,i,j,nx,ny;
+		var a,b, x,y,xp,yp, sth,cth;
+
+		ip = ii;
+		a = aa;
+		b = (Math.sqrt(3.0)/2.0)*a;
+		nx = Math.floor(2.0*r0/b) + 1;
+		ny = Math.floor(2.0*r0/a) + 1;
+		sth = Math.sin(th);
+		cth = Math.cos(th);
+
+		for (i=0; i<nx; i++) {
+			x = b*i;
+			for (j=0; j<ny; j++) {
+				y = a*j; if (i%2==1) y += 0.5*a;
+				if ((x-r0)*(x-r0)+(y-r0)*(y-r0)<=r0*r0) {
+					xp = x-r0; yp = y-r0;
+					g_xx[ip] = x0 + cth*xp - sth*yp;
+					g_yy[ip] = y0 + sth*xp + cth*yp;
+					g_vx[ip] = vx0;
+					g_vy[ip] = vy0;
+					g_ffy[ip] = 0.0;
+					g_ffy[ip] = 0.0;
+					g_mas[ip] = aObject[knd][0];
+					g_rc[ip] = aObject[knd][1];
+					g_damp[ip] = aObject[knd][2];
+					ip += 1;
+				}
+			}
+		}
+		return ip;
+	}
+
+	function removeTranslationalMotion() {
+		var i,nmt=g_Nmt, m=0.0,mvx=0.0,mvy=0.0,vtx,vty;
+
+		for (i=0; i<nmt; i++) {
+			m += g_mas[i];
+			mvx += g_mas[i]*g_vx[i];
+			mvy += g_mas[i]*g_vy[i];
+		}
+		vtx = mvx/m; vty = mvy/m;
+		for (i=0; i<nmt; i++) {
+			g_vx[i] -= vtx;
+			g_vy[i] -= vty;
+		}
+	}
+
+
+	//--------------------  time evolution  --------------------
+
+	function timeEvolution( nCalc ) {
+		var i;
+
+		for (i=0; i<nCalc; i++) {
+			g_sysTime += g_timeStep;
+			moveAOs(g_timeStep);
+		}
+	}
+
+	function moveAOs(dt) {
+		var i,nmt=g_Nmt, a;
+
+		for (i=0; i<nmt; i++) {
+			a = 0.5*dt/g_mas[i];
+			g_vx[i] += a*g_ffx[i];
+			g_vy[i] += a*g_ffy[i];
+			g_xx[i] += g_vx[i]*dt;
+			g_yy[i] += g_vy[i]*dt;
+		}
+		calcForce();
+		for (i=0; i<nmt; i++) {
+			a = 0.5*dt/g_mas[i];
+			g_vx[i] += a*g_ffx[i];
+			g_vy[i] += a*g_ffy[i];
+		}
+		g_kineticEnergy = totalKineticEnergy();
+	}
+
+	function calcForce() {
+		var i,j,nmt=g_Nmt;
+		var xij,yij, rij,f,fxij,fyij;
+
+		for (i=0; i<nmt; i++) {
+			g_ffx[i] = 0.0;
+			g_ffy[i] = 0.0;
+		}
+		g_potentialEnergy = 0.0;
+
+		for (i=0; i<nmt; i++) {
+			for (j=i+1; j<nmt; j++) {
+				xij = g_xx[i]-g_xx[j]; yij = g_yy[i]-g_yy[j];  
+				rij = Math.sqrt(xij*xij+yij*yij);
+				f = force(rij,i,j);
+				g_potentialEnergy += -gc_gg*g_mas[i]*g_mas[j]/rij;
+				fxij = f*xij/rij;
+				fyij = f*yij/rij;
+				g_ffx[i] +=  fxij;
+				g_ffy[i] +=  fyij;
+				g_ffx[j] += -fxij;
+				g_ffy[j] += -fyij;
+			}
+		}
+	}
+
+	function force(r, i, j) {
+		var r0,gmm,f;
+
+		r0 = 0.5*(g_rc[i]+g_rc[j]);
+		gmm = gc_gg*g_mas[i]*g_mas[j];
+		if (r>r0) {
+			f = -gmm/(r*r);
+		} else {
+			f = -20.0*gmm*(r-0.95*r0)/(r0*r0*r0);
+			f += -0.5*(g_damp[i]+g_damp[j])*((g_xx[i]-g_xx[j])*(g_vx[i]-g_vx[j])
+							+(g_yy[i]-g_yy[j])*(g_vy[i]-g_vy[j]));
+		}
+		return f;
+	}
+
+	/*
+	function force(r, i, j) {
+		var r0,gmm,s,s4,f;
+
+		r0 = 0.5*(g_rc[i]+g_rc[j]);
+		gmm = gc_gg*g_mas[i]*g_mas[j];
+		s = (r0/r);
+		s4 = s*s*s*s;
+		f = (gmm/r0)*(s/r)*(9*s4*s4-1.0);
+		if (r<1.276*r0) {
+			f += -0.5*(g_damp[i]+g_damp[j])*((g_xx[i]-g_xx[j])*(g_vx[i]-g_vx[j])+(g_yy[i]-g_yy[j])*(g_vy[i]-g_vy[j]));
+		}
+		return f;
+	}
+	*/
+
+	//--- utility
+
+	function totalKineticEnergy() {
+		var i,nmt=g_Nmt, s=0.0;
+
+		for (i=0; i<nmt; i++) {
+			s += 0.5*g_mas[i]*(g_vx[i]*g_vx[i]+g_vy[i]*g_vy[i]);
+		}
+		return s;
+	}
+
+
+	//--------------------  draw  --------------------
+
+	function draw( ctx ) {
+		var xLen=100.0*gc_AA;
+
+		ctx.clearRect(0, 0, g_xBoxSize, g_yBoxSize);
+
+		drawBalls();
+
+		// caption
+		ctx.fillStyle = "rgb(240,240,240)"; //text background color
+		ctx.fillRect(0, g_yBoxSize,g_xBoxSize, g_yTextSize); //clear text area
+		ctx.fillStyle = "rgb(0, 0, 0)";
+		ctx.fillText("time = "+g_sysTime.toFixed(1)+" (s) = "+(g_sysTime/3600/24).toFixed(3)+" (days)",
+						10, g_yBoxSize+24);
+		ctx.fillText("N = "+g_Nmt, 10, g_yBoxSize+44);
+		ctx.fillText("total energy = "+(g_kineticEnergy+g_potentialEnergy).toExponential(4), 
+						120, g_yBoxSize+44);
+		ctx.fillText("Box = "+(xLen/1000.0).toFixed(1)+"x"+(xLen/1000.0).toFixed(1)+" (km)",
+						10, g_yBoxSize+64);
+		document.getElementById("text_caption").innerHTML = "total energy is not conservative<br>"+
+			"(damping force cause to diminish kinetic energy)"
+	}
+
+	function drawBalls( ctx ) {
+		var i,nmt=g_Nmt, xLen=100.0*gc_AA,sc=g_xBoxSize/xLen;
+		
+		ctx.fillStyle = "rgb(180, 80, 0)";
+		for (i=0; i<nmt; i++) {
+			ctx.beginPath();
+			ctx.arc(g_xx[i]*sc+0.5*xLen*sc, g_yy[i]*sc+0.5*xLen*sc, g_rc[i]*sc*0.5, 0, 2*Math.PI, false);
+			ctx.fill();
+		}
+	}
+
+
+	//--------------------  public  --------------------
+
+	return {
+		init:			setInitialCondition,	// setInitialCondition( theme )
+		evolve:			timeEvolution,			// timeEvolution( nCalc )
+		draw:			draw,					// draw(ctx)
+		
+		getSysParam:	function() { return [ g_Nmt, 100.0*gc_AA, g_timeStep ]; },
+		getTime:		function() { return g_sysTime; },
+		getRc:			function(i) { return g_rc[i]; },
+		getPosition:	function(i) { return [ g_xx[i], g_yy[i] ]; },
+		getVelocity:	function(i) { return [ g_vx[i], g_vy[i] ]; },
+	};
+
+})(); //===============  astroObjectsD2D end  ======================================================================
+
+
+const tjsm101 = (function(){ //========================  tjsm Module  ==============================================
+
+	// theModule.init( v_theme )
+	// theModule.evolve( v_nCalc )
+	
+	// set global
+	const theModule = astroObjectsD2D;
+	
+	let v_theme = 0;		// 0:2-body  1:3-body  2:disk
+	let v_nCalc = 20;
+	
+	let p_nn, p_xLen, p_dt;	// <-- theModule.getSysParam();
+
+	// program flow control
+	let resetFlag = 0;
+	let pauseFlag = 0;
+	let stepFlag = 0;
+	let dispMode = 0; // 0:ball 1:ball+velocity
+	let dispModeChanged = true;
+	let viewHomeRequested = false;
+	let count = 0; // animate() loop count
+	
+	// sizes in the threejs world
+	const xBoxSize = 500;
+	let scale, yBoxSize, zBoxSize, x0, y0, z0;
+	
+	// threejs world objects
+	let aos;
+	let lines;
+	let line_box;
+
+	// three.js , OrbitControls.js
+	const width = 500;
+	const height = 480;
+	const r_camera = 1200.0;
+	let renderer;
+	let scene;
+	let camera;
+	let controls;
+	
+	
+	// -------------------- lil-gui setup
+	
+	const uParam = {
+		theme: '2-body',
+		themeMenu: [ '2-body', '3-body', 'disk' ],
+		dispMode: 'ball',
+		dispMenu: [ 'ball', 'ball + velocity' ],
+		reset: function() { resetFlag = 1; },
+		pause: false,
+		viewHome: function() { viewHomeRequested = true; }
+	};
+	
+	const gui = new GUI();
+	setupGUI();
+	
+	function setupGUI() {
+		gui.add( uParam, 'theme', uParam.themeMenu ).onChange( 
+			str => { v_theme = uParam.themeMenu.indexOf(str); resetFlag = 1; } );
+		
+		gui.add( uParam, 'dispMode', uParam.dispMenu ).onChange( 
+			str => { dispMode = uParam.dispMenu.indexOf(str); dispModeChanged = true; } );
+		
+		gui.add( uParam, 'reset' );
+		gui.add( uParam, 'pause' ).onChange( bool => { pauseFlag = ( bool ) ? 1 : 0; } );
+		gui.add( uParam, 'viewHome' ).name( 'camera: home view' );
+	}
+	
+	
+	// -------------------- main
+	
+	function main() {
+		
+		// construct renderer
+		renderer = new THREE.WebGLRenderer({
+			canvas: document.querySelector('#myCanvas'),
+		});
+		renderer.setSize(width, height);
+		
+		// camera
+		camera = new THREE.PerspectiveCamera(30, width / height, 1, 5000);
+		camera.position.set(0, 0, r_camera);
+		controls = new OrbitControls(camera,renderer.domElement);
+		
+		constructScene();
+		animate();
+	}
+
+
+	function constructScene() {
+
+		// initialize MD
+		theModule.init( v_theme );
+		[ p_nn, p_xLen, p_dt ] = theModule.getSysParam();
+		scale = xBoxSize/p_xLen;
+		yBoxSize = xBoxSize;
+		zBoxSize = 0;
+		x0 = xBoxSize/2.0;
+		y0 = yBoxSize/2.0; 
+		z0 = 0;
+
+		// scene
+		scene = new THREE.Scene();
+ 
+		camera.position.set(0, 0, r_camera); 
+ 
+		// light - DirectionalLight
+		const directionalLight = new THREE.DirectionalLight(0xFFFFFF,0.6);
+		directionalLight.position.set(1, 1, 1);
+		scene.add(directionalLight);
+		// light - AmbientLight
+		const light = new THREE.AmbientLight(0xFFFFFF, 0.4);
+		scene.add(light);
+
+
+		// astro objects
+		// spheres = m3js_spheres( p_nn, x_y_z_r_material_func )
+		aos = m3js_spheres( p_nn,
+			function(i) { // x_y_z_r_material_func: (i) --> [ x, y, z, r, [material] ]
+				let xi, yi;
+				[ xi, yi ] = theModule.getPosition(i);
+				const rc = scale*theModule.getRc(i);
+				const material = new THREE.MeshStandardMaterial({ color: 0xaaaa00 })
+				return [ xi*scale, yi*scale, 0, rc, material ];
+			}
+		);
+		scene.add( aos );
+		
+		// velocity lines
+		// arrows = m3js_arrows( p_nn, [defaultColor] );
+		lines = m3js_arrows( p_nn, "#ffaaaa" );
+		scene.add( lines );
+		
+		// line box
+		{
+			const geometry = new THREE.BoxGeometry( xBoxSize, yBoxSize, zBoxSize );
+			const edges = new THREE.EdgesGeometry( geometry );
+			line_box = new THREE.LineSegments( edges, new THREE.LineBasicMaterial({ color: 0x444444 }) );
+			scene.add( line_box );
+		}
+	}
+	
+	
+	// loop animation
+	function animate() {
+		
+		// select theme
+		if (resetFlag==1) {
+			resetFlag = 0;
+			
+			constructScene();
+			dispModeChanged = true;
+			count = 0;
+		}
+		
+		if ( viewHomeRequested ) {
+			camera.position.set(0, 0, r_camera);
+			viewHomeRequested = false;
+		}
+
+		if ( dispModeChanged ) {
+			dispModeChanged = false;
+			
+			line_box.visible = true;
+			aos.visible = true;
+			lines.visible = false;
+		}
+		
+		// AO evolve
+		if (pauseFlag==0) {
+			theModule.evolve( v_nCalc );
+		} else if ( pauseFlag==1 && stepFlag==1 ) {
+			stepFlag = 0;
+			theModule.evolve( v_nCalc );
+		}
+		
+		
+		// balls position update
+		if ( dispMode==0 || dispMode==1 ) {
+			// spheres.update( x_y_z_rmag_col_func )
+			aos.update(
+				function(i) { // x_y_z_rmag_col_func: (i) --> [ x, y, z, [rmag], [col] ]
+					let xi, yi;
+					[ xi, yi ] = theModule.getPosition(i);
+					return [ xi*scale, yi*scale, 0 ];
+				}
+			);
+		}
+		
+		// velocity lines update
+		if ( dispMode==1 ) {
+			const tt = 0.01*v_nCalc*p_dt;
+			// arrows.update( x_y_z_vx_vy_vz_col_func )
+			lines.update(
+				function(i) { //  x_y_z_vx_vy_vz_col_func: (i) --> [px, py, pz, vx, vy, vz, [col] ]
+					let xi, yi, vxi, vyi;
+					[ xi, yi ] = theModule.getPosition(i);
+					[ vxi, vyi ] = theModule.getVelocity(i);
+					return [ xi*scale, yi*scale, 0, vxi*tt, vyi*tt, 0, ]; // col = default color
+				}
+			);
+		}
+		
+		
+		// output to innerHTML
+		if (count % 20 == 0) {
+			let xLen = p_xLen/1000.0;
+			let sysTime = theModule.getTime();
+			document.getElementById("text_caption").innerHTML = 
+				"box(km)="+xLen.toFixed(0)+"x"+xLen.toFixed(0)
+				+ ", N="+p_nn+", time(s)="+sysTime.toFixed(1)
+				+ " ~ "+(sysTime/3600.0/24.0).toFixed(2)+"(days)<br>";
+		}
+		
+		
+		count += 1;
+		controls.update();
+		renderer.render(scene, camera);
+		requestAnimationFrame(animate);
+	}
+	
+	
+	
+	// -----------------------  m3js_spheres function  ---------------------------
+	//
+	//    ver 0.0.0  2022.10.26 created, last updated on 2022.12.20
+	//
+	//  spheres = m3js_spheres( p_nn, x_y_z_r_material_func );
+	//     p_nn: number of arrows
+	//     x_y_z_r_material_func: (i) --> [ x, y, z, r, [material] ]
+	//        x,y,z: i-th sphere position in the threejs world
+	//        r: i-th sphere radius in the threejs world
+	//        material: such as = new THREE.MeshStandardMaterial({ color:"#ff0000", opacity:1.0, transparent:true });
+	//  scene.add( spheres );
+	//
+	//  spheres.update( x_y_z_rmag_col_func ); // x_y_z_rmag_col_func: (i) --> [ x, y, z, [rmag], [col] ]
+	//     x_y_z_rmag_col_func: (i) --> [ x, y, z, [rmag], [col] ]
+	//        x,y,z: i-th sphere position in the threejs world
+	//        rmag: i-th sphere radius magnified ratio: 0.0 ... 1.0
+	//        col: such as "#ff0000" or "red" or "rgb(255,0,0)" or 0xff0000 or ...
+	//
+	//  spheres.setOpacity( opacity );
+	//     opacity: 0.0 (transparent) ..... 1.0 (opaque)
+	//
+	//  spheres.visible = true | false;
+	//
+	
+	function m3js_spheres( p_nn, x_y_z_r_material_func ) {
+		const nn = p_nn;
+		const defaultMaterial = new THREE.MeshStandardMaterial({ color:"#ff0000", opacity:1.0, transparent:true });
+		const spheres = new THREE.Group();
+		spheres.array = [];
+		
+		for (let i=0; i<nn; i++) {
+			let x, y, z, r, mater;
+			[ x, y, z, r, mater ] = x_y_z_r_material_func(i);
+			const geometry = new THREE.SphereGeometry(r, 18, 10);
+			const material = ( mater != undefined ) ? mater : defaultMaterial;
+			spheres.array[i] = new THREE.Mesh(geometry, material);
+			spheres.array[i].position.set(x, y, z);
+			spheres.array[i].visible = true;
+			spheres.add( spheres.array[i] );
+		}
+		
+		spheres.update = spheresUpdate;
+		spheres.setOpacity = setSheresOpacity;
+		return spheres;
+		
+		
+		function spheresUpdate( x_y_z_rmag_col_func ) {
+			for (let i=0; i<nn; i++) {
+				const vec = x_y_z_rmag_col_func(i);
+				if ( !Array.isArray(vec) ) {
+					spheres.array[i].visible = false;
+					continue;
+				}
+				let x, y, z, rmag, col;
+				[ x, y, z, rmag, col ] = vec;
+				spheres.array[i].position.set(x, y, z);
+				if ( rmag != undefined ) spheres.array[i].scale.set(rmag,rmag,rmag);
+				if ( col != undefined ) spheres.array[i].material.color = new THREE.Color( col );
+				spheres.array[i].visible = true;
+			}
+			spheres.visible = true;
+		}
+		
+		function setSheresOpacity( opa ) {
+			for (let i=0; i<nn; i++) {
+				spheres.array[i].material.opacity = opa;
+			}
+		}
+	}
+	
+	// -----------------------  m3js_spheres function end
+	
+	
+	// -----------------------  m3js_arrows function  ---------------------------
+	//
+	//    ver 0.0.0  2022.10.25 created, last updated on 2022.12.19
+	//
+	//  arrows = m3js_arrows( p_nn, [defaultColor] );
+	//     nn: number of arrows
+	//     defaultColor: default color of arrows
+	//  scene.add( arrows );
+	//
+	//  arrows.update( x_y_z_vx_vy_vz_col_func );
+	//     x_y_z_vx_vy_vz_col_func: (i) --> [px, py, pz, vx, vy, vz, [col] ]
+	//        x,y,z: i-th arrow starting point in the threejs world
+	//        vx,vy,vz: i-th arrow vector (vx, vy, vz) in the threejs world
+	//        col: such as "#ff0000" or "red" or "rgb(255,0,0)" or 0xff0000 or ...
+	//
+	//  arrows.visible = true | false;
+	//
+	
+	function m3js_arrows( p_nn, defaultColor ) {
+		const nn = p_nn;
+		const dcol = ( defaultColor==undefined ) ? "#ff0000" : defaultColor;
+		const lines = new THREE.Group();
+		lines.array = [];
+		
+		for (let i=0; i<nn; i++) {
+			const geometry = new THREE.BufferGeometry();
+			const positions = new Float32Array( 2 * 3 ); // MAX_POINTS = 2,  3 vertices per point
+			geometry.setAttribute( 'position', new THREE.BufferAttribute( positions, 3 ) );
+			geometry.setDrawRange( 0, 2 );
+			const material = new THREE.LineBasicMaterial( { color: dcol } );
+			const line = new THREE.Line( geometry, material );
+			line.visible = false;
+			lines.array[i] = line;
+    		lines.add( lines.array[i] );
+		}
+		
+		lines.update = linesUpdate;
+		
+		return lines;
+		
+		
+		function linesUpdate( x_y_z_vx_vy_vz_col_func ) {
+			for (let i=0; i<nn; i++) {
+				const line = lines.array[i];
+				const positions = line.geometry.attributes.position.array;
+				const vec = x_y_z_vx_vy_vz_col_func(i);
+				if ( !Array.isArray(vec) ) {
+					line.visible = false;
+					continue;
+				}
+				
+				let x, y, z, vx, vy, vz, col;
+				[ x, y, z, vx, vy, vz, col ] = vec;
+				if ( col==undefined ) col = dcol;
+				
+				positions[0] = x; // point 0
+				positions[1] = y;
+				positions[2] = z;
+				positions[3] = x + vx; // point 1
+				positions[4] = y + vy;
+				positions[5] = z + vz;
+				line.visible = true;
+				line.material.color = new THREE.Color( col );
+				line.geometry.attributes.position.needsUpdate = true;
+			}
+			lines.visible = true;
+		}
+	}
+	
+	// -----------------------  m3js_arrows function end
+	
+	
+	//--------------------  public  --------------------
+	
+	return {
+		main:			main,			// main()
+		
+	}
+
+})(); //==============  tjsm101 module end  ========================================================================
+
+
+// event
+const tjsm = tjsm101;
+window.addEventListener('load', tjsm.main );
+
+
+</script>
+
+<!-- %%%%%%%%%%%%%%%%%%%%  end of javaScript  %%%%%%%%%%%%%%%%%%%% -->
+
+</head>
+
+<body>
+<p>[tm101] Astro Objects - dynamics under gravity 2D</p>
+<canvas id="myCanvas" width="500" height="480" ></canvas>
+<br>
+
+<hr width="500" align="left" color="#a0a0a0">
+<div id="text_caption" ></div>
+<hr width="500" align="left" color="#a0a0a0">
+<a href="javascript:history.back()">back</a> | <a href="http://mike1336.web.fc2.com/index.html">top</a>
+<br>
+
+</body>
+</html>
+
